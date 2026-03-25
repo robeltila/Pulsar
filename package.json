@@ -1,0 +1,22 @@
+{
+  "name": "pulsar",
+  "version": "1.0.0",
+  "description": "",
+  "main": "gen.js",
+  "directories": {
+    "lib": "lib"
+  },
+  "scripts": {
+    "start": "node gen.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "@faker-js/faker": "^10.3.0",
+    "mongodb": "^6.21.0",
+    "mysql2": "^3.19.0",
+    "pg": "^8.16.3"
+  }
+}
