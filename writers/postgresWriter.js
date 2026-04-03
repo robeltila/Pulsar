@@ -18,20 +18,26 @@ export async function createPostgresWriter(config) {
   const adminPool = new Pool({
     host: parsedUrl.hostname,
     port: Number(parsedUrl.port),
-    user: decodeURIComponent(parsedUrl.username),
-    password: decodeURIComponent(parsedUrl.password),
+    user: decodeURIComponent(parsedUrl.username) || " ",
+    password: decodeURIComponent(parsedUrl.password) || " ",
     database: "postgres",
-    max: Math.max(1, config.connectionCount),
+    max: 1,
+    connectionTimeoutMillis: 10000,
   });
 
-  const existingDb = await adminPool.query(
-    "SELECT 1 FROM pg_database WHERE datname = $1",
-    [dbName],
-  );
-  if (existingDb.rowCount === 0) {
-    await adminPool.query(`CREATE DATABASE "${dbName}"`);
+  try {
+    const existingDb = await adminPool.query(
+      "SELECT 1 FROM pg_database WHERE datname = $1",
+      [dbName],
+    );
+    if (existingDb.rowCount === 0) {
+      await adminPool.query(`CREATE DATABASE "${dbName}"`);
+    }
+  } finally {
+    try {
+      await adminPool.end();
+    } catch {}
   }
-  await adminPool.end();
 
   const pool = new Pool({
     host: parsedUrl.hostname,

@@ -1,3 +1,4 @@
+import { writer } from "node:repl";
 import {
   collectConfiguration,
   createTaskQueue,
@@ -5,18 +6,28 @@ import {
   formatRuntime,
   showProgress,
   runWorker,
+  createTaskQueueGenerator,
 } from "./utils.js";
 
 async function main() {
-  const config = await collectConfiguration();
-  const taskQueue = createTaskQueue(config.totalRows, config.batchSize);
-  if (!taskQueue.length) {
-    console.log("No rows to generate.");
+  let config = null;
+  let writer = null;
+
+  try {
+    config = await collectConfiguration();
+  } catch (error) {
+    console.error(error?.message);
     return;
   }
 
-  const writer = await createWriter(config);
-  const workerCapacity = Math.min(config.workerCount, taskQueue.length);
+  try {
+    writer = await createWriter(config);
+  } catch (error) {
+    console.log(error?.message);
+    return;
+  }
+  const taskCount = Math.ceil(config.totalRows / config.batchSize);
+  const workerCapacity = Math.min(config.workerCount, taskCount);
 
   const stats = {
     totalRowsWritten: 0,
@@ -50,7 +61,6 @@ async function main() {
     config,
     control,
     stats,
-    taskQueue,
     workerCapacity,
     writer,
   };
@@ -59,7 +69,6 @@ async function main() {
     stats,
     config.totalRows,
     workerCapacity,
-    taskQueue,
     config.targetLabel,
     config.connectionCount,
   );
@@ -70,7 +79,6 @@ async function main() {
       stats,
       config.totalRows,
       workerCapacity,
-      taskQueue,
       config.targetLabel,
       config.connectionCount,
     );
@@ -91,35 +99,30 @@ async function main() {
     }
   };
 
-    process.on("SIGINT", handleShutdown);
-    process.on("SIGTERM", handleShutdown);
+  process.on("SIGINT", handleShutdown);
+  process.on("SIGTERM", handleShutdown);
 
+  const taskGenerator = createTaskQueueGenerator(
+    config.totalRows,
+    config.batchSize,
+  );
   const workerPromises = [];
   for (let index = 0; index < workerCapacity; index += 1) {
-    const task = taskQueue.shift();
-    if (!task) break;
-    workerPromises.push(runWorker(task, context));
+    workerPromises.push(runWorker(taskGenerator, context));
   }
 
   try {
-    await Promise.allSettled(workerPromises);
+    await Promise.all(workerPromises);
     stats.runtimeLabel = formatRuntime(stats.startTime);
-    /*showProgress(
-      stats,
-      config.totalRows,
-      workerCapacity,
-      taskQueue,
-      config.targetLabel,
-      config.connectionCount,
-    );*/
+
     if (!abortError) {
       process.stdout.write("\n\n>>> Generation complete.\n\n");
     }
+  } catch (error) {
+    if (!abortError) console.error(error?.message ?? error);
   } finally {
     clearInterval(runtimeTimer);
-    await writer.close().catch((error) => {
-      console.error("Failed to close target cleanly:", error);
-    });
+    await writer.close().catch(() => {});
     process.off("SIGINT", handleShutdown);
     process.off("SIGTERM", handleShutdown);
   }

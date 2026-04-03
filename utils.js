@@ -20,12 +20,31 @@ import { createMongoWriter } from "./writers/mongoWriter.js";
 let hasRenderedStatus = false;
 
 export function createTaskQueue(totalRows, batchSize) {
+  if (!Number.isInteger(totalRows) || totalRows < 0) {
+    throw new Error("totalRows must be a non-negative integer");
+  }
+  if (!Number.isInteger(batchSize) || batchSize <= 0) {
+    throw new Error("batchSize must be a positive integer");
+  }
+
   const tasks = [];
   for (let start = 0; start < totalRows; start += batchSize) {
     const end = Math.min(totalRows, start + batchSize);
     tasks.push({ start, end });
   }
   return tasks;
+}
+
+export function* createTaskQueueGenerator(totalRows, batchSize) {
+  if (!Number.isInteger(totalRows) || totalRows < 0)
+    throw new Error("totalRows must be non-negative");
+  if (!Number.isInteger(batchSize) || batchSize <= 0)
+    throw new Error("batchSize must be positive");
+
+  for (let start = 0; start < totalRows; start += batchSize) {
+    const end = Math.min(totalRows, start + batchSize);
+    yield { start, end };
+  }
 }
 
 export function formatRuntime(startTime) {
@@ -44,7 +63,6 @@ export function showProgress(
   stats,
   totalRows,
   workerCapacity,
-  taskQueue,
   targetLabel,
   connectionLabel,
 ) {
@@ -56,7 +74,17 @@ export function showProgress(
   const bar =
     "█".repeat(filledLength) + "-".repeat(PROGRESS_BAR_LENGTH - filledLength);
   const progressLine = `${bar} ${percentage.toFixed(2)}% | ${stats.totalRowsWritten}/${totalRows} rows | Runtime: ${stats.runtimeLabel}`;
-  const workerLine = `[target=${targetLabel}] workers=${workerCapacity} active=${stats.activeWorkers} queued=${taskQueue.length} connections=${connectionLabel}`;
+  let workerLine = `[target=${targetLabel}] workers=${workerCapacity} active=${stats.activeWorkers}`;
+
+  if (
+    process.env.TARGET === "mysql" ||
+    process.env.TARGET === "postgres" ||
+    process.env.TARGET === "pg" ||
+    process.env.TARGET === "mongodb" ||
+    process.env.TARGET === "mongodb"
+  ) {
+    workerLine = `[target=${targetLabel}] workers=${workerCapacity} active=${stats.activeWorkers} connections=${connectionLabel}`;
+  }
 
   if (!hasRenderedStatus) {
     process.stdout.write(`${progressLine}\n${workerLine}`);
@@ -337,7 +365,7 @@ export async function collectConfiguration() {
       label: "Database password",
       defaultValue: "",
       questionInterface,
-    }); 
+    });
 
     return {
       target,
@@ -430,7 +458,7 @@ function applyNextTask(worker, taskQueue) {
   return Boolean(nextTask);
 }
 
-export function runWorker(initialTask, context) {
+export function runWorker(taskGenerator, context) {
   return new Promise((resolve, reject) => {
     const worker = new Worker(WORKER_SCRIPT, { type: "module" });
     context.control.activeWorkers.add(worker);
@@ -457,15 +485,6 @@ export function runWorker(initialTask, context) {
           return;
         }
       }
-
-      /*showProgress(
-        context.stats,
-        context.config.totalRows,
-        context.workerCapacity,
-        context.taskQueue,
-        context.config.targetLabel,
-        context.config.connectionCount,
-      );*/
       resolve();
     };
 
@@ -495,20 +514,27 @@ export function runWorker(initialTask, context) {
           context.stats,
           context.config.totalRows,
           context.workerCapacity,
-          context.taskQueue,
           context.config.targetLabel,
           context.config.connectionCount,
         );
-
-        if (!applyNextTask(worker, context.taskQueue)) {
+        
+        const nextTask = taskGenerator.next();
+        if (nextTask.done) {
           await finish();
+          return;
         }
+        
+        worker.postMessage(nextTask.value);
       } catch (error) {
         await finish(error);
       }
     });
 
     context.stats.activeWorkers = context.control.activeWorkers.size;
-    worker.postMessage(initialTask);
+
+    const firstTask = taskGenerator.next();
+    if (!firstTask.done) {
+      worker.postMessage(firstTask.value);
+    }
   });
 }
